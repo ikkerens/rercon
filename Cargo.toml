@@ -1,0 +1,9 @@
+[package]
+name = "rercon"
+version = "0.1.0"
+authors = ["Rens Rikkerink <contact@ikkerens.com>"]
+edition = "2018"
+
+[dependencies]
+byteorder = "1.3.2"
+hex = "0.3.2"

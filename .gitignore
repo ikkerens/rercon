@@ -1,0 +1,9 @@
+# Rust specific
+/target/
+/**/*.rs.bk
+/Cargo.lock
+
+# IntelliJ files
+/.idea/
+/rercon.iml
+
