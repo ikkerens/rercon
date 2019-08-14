@@ -2,7 +2,8 @@ use std::io::{Read, Write};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
-use crate::error::RconError;
+use crate::error::{RconError,
+                   RconError::CommandTooLong};
 
 type PacketType = i32;
 
@@ -55,6 +56,10 @@ impl Packet {
     }
 
     pub(crate) fn send_internal(&self, stream: &mut dyn Write) -> Result<(), RconError> {
+        if self.body.len() > 1014 { // 1024 - 10
+            return Err(CommandTooLong);
+        }
+
         stream.write_i32::<LittleEndian>(self.body.len() as i32 + 10)?;
         stream.write_i32::<LittleEndian>(self.id)?;
         stream.write_i32::<LittleEndian>(self.packet_type)?;

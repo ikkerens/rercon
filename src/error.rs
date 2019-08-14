@@ -1,27 +1,36 @@
-use std::{io, net};
-use std::fmt::{Debug, Display, Formatter};
-use std::string::FromUtf8Error;
+use std::{{io, net},
+          fmt::{Debug, Display, Formatter},
+          string::FromUtf8Error};
 
-use crate::error::RconError::{AddressParseError, IOError, UTFEncodingError};
+use crate::error::RconError::{AddressParse, IO, UTFEncoding};
 
+/// A common error enum that is returned by all public functions describing different forms of failures that can occur within this library.
 #[derive(Debug)]
 pub enum RconError {
-    AddressParseError(net::AddrParseError),
-    IOError(io::Error),
-    CommandTooLongError,
-    UTFEncodingError(FromUtf8Error),
-    UnexpectedPacketError,
-    DesynchronizedPacketError,
-    PasswordIncorrectError,
+    /// There is an error in the passed address field
+    AddressParse(net::AddrParseError),
+    /// There was a network issue during connection or exec
+    IO(io::Error),
+    /// The command provided is longer than 1014 characters.
+    CommandTooLong,
+    /// The server did not respond with proper UTF-8
+    UTFEncoding(FromUtf8Error),
+    /// The server sent a packet with a type we were not expecting.
+    UnexpectedPacket,
+    /// The server sent a packet with an ID we were not expecting.
+    DesynchronizedPacket,
+    /// The pass field is incorrect
+    PasswordIncorrect,
+    /// Returned by [`ReConnection::exec`](struct.ReConnection.html#method.exec) when [`ReConnection`](struct.ReConnection.html) is busy reconnecting.
     BusyReconnecting(String),
 }
 
 impl ::std::error::Error for RconError {
     fn source(&self) -> Option<&(dyn ::std::error::Error + 'static)> {
         match self {
-            IOError(e) => Some(e),
-            AddressParseError(e) => Some(e),
-            UTFEncodingError(e) => Some(e),
+            IO(e) => Some(e),
+            AddressParse(e) => Some(e),
+            UTFEncoding(e) => Some(e),
             _ => None,
         }
     }
@@ -35,18 +44,18 @@ impl Display for RconError {
 
 impl From<io::Error> for RconError {
     fn from(e: io::Error) -> Self {
-        IOError(e)
+        IO(e)
     }
 }
 
 impl From<net::AddrParseError> for RconError {
     fn from(e: net::AddrParseError) -> Self {
-        AddressParseError(e)
+        AddressParse(e)
     }
 }
 
 impl From<FromUtf8Error> for RconError {
     fn from(e: FromUtf8Error) -> Self {
-        UTFEncodingError(e)
+        UTFEncoding(e)
     }
 }

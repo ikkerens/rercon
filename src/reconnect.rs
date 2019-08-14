@@ -1,18 +1,23 @@
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::{ops::DerefMut,
+          sync::{Arc, Mutex},
+          thread,
+          time::Duration};
 
-use crate::connection::SingleConnection;
-use crate::error::RconError;
-use crate::error::RconError::{BusyReconnecting, IOError};
-use crate::reconnect::Status::{Connected, Disconnected};
+use crate::{connection::SingleConnection,
+            error::{RconError,
+                    RconError::{BusyReconnecting, IO}},
+            reconnect::Status::{Connected, Disconnected}};
 
 enum Status {
     Connected(SingleConnection),
     Disconnected(String),
 }
 
+/// Drop-in replacement wrapper of [`Connection`](struct.Connection.html) which intercepts all [`IO errors`](enum.Error.html#variant.IO)
+/// returned by [`Connection::exec`](struct.Connection.html#method.exec) to start the reconnection thread, and will opt to return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting)
+/// instead.
+///
+/// For further docs, refer to [`Connection`](struct.Connection.html), as it shares the same API.
 #[derive(Clone)]
 pub struct ReconnectingConnection {
     address: String,
@@ -23,6 +28,7 @@ pub struct ReconnectingConnection {
 }
 
 impl ReconnectingConnection {
+    /// This function behaves identical to [`Connection::open`](struct.Connection.html#method.open).
     pub fn open<S: Into<String>>(address: S, pass: S, connect_timeout: Option<Duration>) -> Result<Self, RconError> {
         let address = address.into();
         let pass = pass.into();
@@ -35,6 +41,8 @@ impl ReconnectingConnection {
         })
     }
 
+    /// This function behaves identical to [`Connection::exec`](struct.Connection.html#method.exec) unless `Err([IO](enum.Error.html#variant.IO))` is returned,
+    /// in which case it will start reconnecting and return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting) until the connection has been re-established.
     pub fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
         // First, we check if we are actively reconnecting, this must be done within a Mutex
         let result = {
@@ -50,7 +58,7 @@ impl ReconnectingConnection {
         // If we are connected, send the request
         match result {
             Err(e) => match &e {
-                IOError(_) => Err(self.start_reconnect(e)),
+                IO(_) => Err(self.start_reconnect(e)),
                 _ => Err(e)
             },
             Ok(result) => Ok(result)
@@ -65,7 +73,9 @@ impl ReconnectingConnection {
         }
 
         let clone = self.clone();
-        thread::spawn(move || clone.reconnect_loop());
+        thread::Builder::new()
+            .name(format!("RCON-{}-reconnect-thread", &self.address))
+            .spawn(move || clone.reconnect_loop()).unwrap();
 
         BusyReconnecting(e.to_string())
     }
