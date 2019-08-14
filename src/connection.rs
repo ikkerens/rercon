@@ -1,8 +1,7 @@
 use std::{net::{SocketAddr, TcpStream},
           time::Duration};
 
-use crate::{Connection,
-            error::{RconError,
+use crate::{error::{RconError,
                     RconError::{DesynchronizedPacket, PasswordIncorrect, UnexpectedPacket}},
             packet::{Packet, TYPE_AUTH, TYPE_AUTH_RESPONSE, TYPE_EXEC, TYPE_RESPONSE}};
 
@@ -50,17 +49,8 @@ impl SingleConnection {
         })
     }
 
-    fn next_counter(&mut self) -> i32 {
-        self.counter = match self.counter.checked_add(1) {
-            Some(new) => new,
-            None => 1,
-        };
-        self.counter
-    }
-}
-
-impl Connection for SingleConnection {
-    fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
+    /// Sends a command to the RCON server, returning the combined reply (in case there are multiple packets) or an error.
+    pub fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
         // 0. Prepare some variables
         let mut end_id = -1;
         let mut result = String::new();
@@ -105,5 +95,13 @@ impl Connection for SingleConnection {
 
         // Thank you come again
         Ok(result)
+    }
+
+    fn next_counter(&mut self) -> i32 {
+        self.counter = match self.counter.checked_add(1) {
+            Some(new) => new,
+            None => 1,
+        };
+        self.counter
     }
 }
