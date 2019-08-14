@@ -6,7 +6,7 @@ use std::{ops::DerefMut,
 use crate::{connection::SingleConnection,
             error::{RconError,
                     RconError::{BusyReconnecting, IO}},
-            reconnect::Status::{Connected, Disconnected}};
+            reconnect::Status::{Connected, Disconnected}, Connection};
 
 enum Status {
     Connected(SingleConnection),
@@ -41,30 +41,6 @@ impl ReconnectingConnection {
         })
     }
 
-    /// This function behaves identical to [`Connection::exec`](struct.Connection.html#method.exec) unless `Err([IO](enum.Error.html#variant.IO))` is returned,
-    /// in which case it will start reconnecting and return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting) until the connection has been re-established.
-    pub fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
-        // First, we check if we are actively reconnecting, this must be done within a Mutex
-        let result = {
-            let mut lock = self.internal.lock().unwrap();
-            let connection = match lock.deref_mut() {
-                Connected(ref mut c) => c,
-                Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
-            };
-
-            connection.exec(cmd)
-        };
-
-        // If we are connected, send the request
-        match result {
-            Err(e) => match &e {
-                IO(_) => Err(self.start_reconnect(e)),
-                _ => Err(e)
-            },
-            Ok(result) => Ok(result)
-        }
-    }
-
     fn start_reconnect(&self, e: RconError) -> RconError {
         // First, we change the status, which automatically disconnects the old connection
         {
@@ -93,5 +69,26 @@ impl ReconnectingConnection {
                 }
             }
         }
+    }
+}
+
+impl Connection for ReconnectingConnection {
+    fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
+        // First, we check if we are actively reconnecting, this must be done within a Mutex
+        let result = {
+            let mut lock = self.internal.lock().unwrap();
+            let connection = match lock.deref_mut() {
+                Connected(ref mut c) => c,
+                Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
+            };
+
+            connection.exec(cmd)
+        };
+
+        // If we are connected, send the request
+        result.map_err(|e| match e {
+            IO(_) => self.start_reconnect(e),
+            _ => e,
+        })
     }
 }

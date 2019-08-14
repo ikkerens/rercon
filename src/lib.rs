@@ -11,9 +11,9 @@
 //!
 //! All public methods use a template to accept all forms of strings that implement `Into<String>`, however the library will always return `std::string::String`
 
-#![deny(warnings,bad_style,missing_docs)]
+#![deny(warnings, bad_style, missing_docs)]
 
-pub use crate::connection::SingleConnection as Connection;
+pub use crate::connection::SingleConnection as SingleConnection;
 pub use crate::error::RconError as Error;
 pub use crate::reconnect::ReconnectingConnection as ReConnection;
 
@@ -24,3 +24,12 @@ mod reconnect;
 
 #[cfg(test)]
 mod tests;
+
+/// This is a trait
+pub trait Connection {
+    /// Sends a command to the RCON server, returning the combined reply (in case there are multiple packets) or an error.
+    ///
+    /// If the underlying type is a [`ReConnection`](struct.ReConnection.html) this function will intercept any IO errors, instead returning [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting),
+    /// and keep doing so until the connection has been re-established.
+    fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, Error>;
+}
