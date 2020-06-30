@@ -11,15 +11,18 @@
 //!
 //! All public methods use a template to accept all forms of strings that implement `Into<String>`, however the library will always return `std::string::String`
 
-#![deny(warnings,bad_style,missing_docs)]
+#![deny(warnings, bad_style, missing_docs)]
 
 pub use crate::connection::SingleConnection as Connection;
 pub use crate::error::RconError as Error;
+#[cfg(feature = "reconnection")]
 pub use crate::reconnect::ReconnectingConnection as ReConnection;
 
+mod connection;
 mod error;
 mod packet;
-mod connection;
+mod packet_net;
+#[cfg(feature = "reconnection")]
 mod reconnect;
 
 #[cfg(test)]

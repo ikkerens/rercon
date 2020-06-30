@@ -1,0 +1,16 @@
+name: Run tests
+
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout git repository
+      uses: actions/checkout@v1
+    - name: Test code formatting
+      run: cargo fmt --all -- --check
+    - name: Test code correctness
+      run: cargo clippy --all -- -D warnings
+    - name: Run rust unit tests
+      run: cargo test --all

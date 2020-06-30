@@ -1,16 +1,16 @@
-use std::{ops::DerefMut,
-          sync::{Arc, Mutex},
-          thread,
-          time::Duration};
+use std::{ops::DerefMut, sync::Arc, thread, time::Duration};
 
-use crate::{connection::SingleConnection,
-            error::{RconError,
-                    RconError::{BusyReconnecting, IO}},
-            reconnect::Status::{Connected, Disconnected}};
+use tokio::sync::Mutex;
+
+use crate::{
+	connection::SingleConnection,
+	error::RconError::{self, BusyReconnecting, IO},
+	reconnect::Status::{Connected, Disconnected},
+};
 
 enum Status {
-    Connected(SingleConnection),
-    Disconnected(String),
+	Connected(SingleConnection),
+	Disconnected(String),
 }
 
 /// Drop-in replacement wrapper of [`Connection`](struct.Connection.html) which intercepts all [`IO errors`](enum.Error.html#variant.IO)
@@ -20,78 +20,80 @@ enum Status {
 /// For further docs, refer to [`Connection`](struct.Connection.html), as it shares the same API.
 #[derive(Clone)]
 pub struct ReconnectingConnection {
-    address: String,
-    pass: String,
-    connect_timeout: Option<Duration>,
+	address: String,
+	pass: String,
+	connect_timeout: Option<Duration>,
 
-    internal: Arc<Mutex<Status>>,
+	internal: Arc<Mutex<Status>>,
 }
 
 impl ReconnectingConnection {
-    /// This function behaves identical to [`Connection::open`](struct.Connection.html#method.open).
-    pub fn open<S: Into<String>>(address: S, pass: S, connect_timeout: Option<Duration>) -> Result<Self, RconError> {
-        let address = address.into();
-        let pass = pass.into();
-        let internal = Arc::new(Mutex::new(Connected(SingleConnection::open(address.clone(), pass.clone(), connect_timeout)?)));
-        Ok(ReconnectingConnection {
-            address,
-            pass,
-            connect_timeout,
-            internal,
-        })
-    }
+	/// This function behaves identical to [`Connection::open`](struct.Connection.html#method.open).
+	pub async fn open<S: Into<String>>(
+		address: S, pass: S, connect_timeout: Option<Duration>,
+	) -> Result<Self, RconError> {
+		let address = address.into();
+		let pass = pass.into();
+		let internal = Arc::new(Mutex::new(Connected(
+			SingleConnection::open(address.clone(), pass.clone(), connect_timeout).await?,
+		)));
+		Ok(ReconnectingConnection {
+			address,
+			pass,
+			connect_timeout,
+			internal,
+		})
+	}
 
-    /// This function behaves identical to [`Connection::exec`](struct.Connection.html#method.exec) unless `Err([IO](enum.Error.html#variant.IO))` is returned,
-    /// in which case it will start reconnecting and return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting) until the connection has been re-established.
-    pub fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
-        // First, we check if we are actively reconnecting, this must be done within a Mutex
-        let result = {
-            let mut lock = self.internal.lock().unwrap();
-            let connection = match lock.deref_mut() {
-                Connected(ref mut c) => c,
-                Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
-            };
+	/// This function behaves identical to [`Connection::exec`](struct.Connection.html#method.exec) unless `Err([IO](enum.Error.html#variant.IO))` is returned,
+	/// in which case it will start reconnecting and return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting) until the connection has been re-established.
+	pub async fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
+		// First, we check if we are actively reconnecting, this must be done within a Mutex
+		let result = {
+			let mut lock = self.internal.lock().await;
+			let connection = match lock.deref_mut() {
+				Connected(ref mut c) => c,
+				Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
+			};
 
-            connection.exec(cmd)
-        };
+			connection.exec(cmd).await
+		};
 
-        // If we are connected, send the request
-        match result {
-            Err(e) => match &e {
-                IO(_) => Err(self.start_reconnect(e)),
-                _ => Err(e)
-            },
-            Ok(result) => Ok(result)
-        }
-    }
+		// If we are connected, send the request
+		match result {
+			Err(e) => match &e {
+				IO(_) => Err(self.start_reconnect(e).await),
+				_ => Err(e),
+			},
+			Ok(result) => Ok(result),
+		}
+	}
 
-    fn start_reconnect(&self, e: RconError) -> RconError {
-        // First, we change the status, which automatically disconnects the old connection
-        {
-            let mut lock = self.internal.lock().unwrap();
-            *lock = Disconnected(e.to_string());
-        }
+	async fn start_reconnect(&self, e: RconError) -> RconError {
+		// First, we change the status, which automatically disconnects the old connection
+		{
+			let mut lock = self.internal.lock().await;
+			*lock = Disconnected(e.to_string());
+		}
 
-        let clone = self.clone();
-        thread::Builder::new()
-            .name(format!("RCON-{}-reconnect-thread", &self.address))
-            .spawn(move || clone.reconnect_loop()).unwrap();
+		let clone = self.clone();
+		tokio::spawn(async move { clone.reconnect_loop().await });
 
-        BusyReconnecting(e.to_string())
-    }
+		BusyReconnecting(e.to_string())
+	}
 
-    fn reconnect_loop(&self) {
-        loop {
-            match SingleConnection::open(self.address.clone(), self.pass.clone(), self.connect_timeout.clone()) {
-                Err(_) => {
-                    thread::sleep(Duration::from_secs(1));
-                }
-                Ok(c) => {
-                    let mut lock = self.internal.lock().unwrap();
-                    *lock = Connected(c);
-                    return;
-                }
-            }
-        }
-    }
+	async fn reconnect_loop(&self) {
+		loop {
+			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.connect_timeout).await {
+				Err(_) => {
+					thread::sleep(Duration::from_secs(1));
+				}
+				Ok(c) => {
+					let mut lock = self.internal.lock().await;
+					*lock = Connected(c);
+					return;
+				}
+			}
+		}
+	}
 }

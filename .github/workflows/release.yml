@@ -1,0 +1,26 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*.*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Basic tests
+      - name: Checkout git repository
+        uses: actions/checkout@v1
+      - name: Test code formatting
+        run: cargo fmt --all -- --check
+      - name: Test code correctness
+        run: cargo clippy --all -- -D warnings
+      - name: Run rust unit tests
+        run: cargo test --all
+
+      # Prepare crate
+      - name: Set crate version
+        run: sed -i "s/^\(version = \).*/version = \"$(git describe --tags)\"/g" ./Cargo.toml
+      - name: Publish crate
+        run: cargo login ${{ secrets.CRATES_IO_TOKEN }} && cargo publish --allow-dirty # Dirty because we modified Cargo.toml
