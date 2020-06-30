@@ -1,6 +1,6 @@
-use std::{ops::DerefMut, sync::Arc, thread, time::Duration};
+use std::{ops::DerefMut, sync::Arc, time::Duration};
 
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, time::delay_for};
 
 use crate::{
 	connection::SingleConnection,
@@ -86,7 +86,7 @@ impl ReconnectingConnection {
 		loop {
 			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.connect_timeout).await {
 				Err(_) => {
-					thread::sleep(Duration::from_secs(1));
+					delay_for(Duration::from_secs(1)).await;
 				}
 				Ok(c) => {
 					let mut lock = self.internal.lock().await;
