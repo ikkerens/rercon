@@ -2,7 +2,7 @@ use crate::packet::{Packet, TYPE_AUTH_RESPONSE, TYPE_RESPONSE};
 
 #[tokio::test]
 async fn packet_serialize() {
-	let buf = Packet::new(0x12345678, TYPE_RESPONSE, "This is a test string.")
+	let buf = Packet::new(0x12345678, TYPE_RESPONSE, "This is a test string.".to_string())
 		.create_packet_buffer()
 		.unwrap();
 
