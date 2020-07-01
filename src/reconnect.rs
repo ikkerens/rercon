@@ -56,17 +56,16 @@ impl ReconnectingConnection {
 				Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
 			};
 
+			// If we are connected, send the request
 			connection.exec(cmd).await
 		};
 
-		// If we are connected, send the request
-		match result {
-			Err(e) => match &e {
-				IO(_) => Err(self.start_reconnect(e).await),
-				_ => Err(e),
-			},
-			Ok(result) => Ok(result),
+		// If the result is an IO error, trigger reconnection and return BusyReconnecting
+		if let Err(IO(_)) = result {
+			return Err(self.start_reconnect(result.unwrap_err()).await);
 		}
+
+		result
 	}
 
 	async fn start_reconnect(&self, e: RconError) -> RconError {
