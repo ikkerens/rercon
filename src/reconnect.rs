@@ -29,11 +29,11 @@ pub struct ReconnectingConnection {
 
 impl ReconnectingConnection {
 	/// This function behaves identical to [`Connection::open`](struct.Connection.html#method.open).
-	pub async fn open<S: Into<String>>(
-		address: S, pass: S, connect_timeout: Option<Duration>,
+	pub async fn open(
+		address: impl ToString, pass: impl ToString, connect_timeout: Option<Duration>,
 	) -> Result<Self, RconError> {
-		let address = address.into();
-		let pass = pass.into();
+		let address = address.to_string();
+		let pass = pass.to_string();
 		let internal = Arc::new(Mutex::new(Connected(
 			SingleConnection::open(address.clone(), pass.clone(), connect_timeout).await?,
 		)));
@@ -47,7 +47,7 @@ impl ReconnectingConnection {
 
 	/// This function behaves identical to [`Connection::exec`](struct.Connection.html#method.exec) unless `Err([IO](enum.Error.html#variant.IO))` is returned,
 	/// in which case it will start reconnecting and return [`BusyReconnecting`](enum.Error.html#variant.BusyReconnecting) until the connection has been re-established.
-	pub async fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
+	pub async fn exec(&mut self, cmd: impl ToString) -> Result<String, RconError> {
 		// First, we check if we are actively reconnecting, this must be done within a Mutex
 		let result = {
 			let mut lock = self.internal.lock().await;

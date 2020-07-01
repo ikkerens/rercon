@@ -18,12 +18,8 @@ pub(crate) struct Packet {
 }
 
 impl Packet {
-	pub(crate) fn new<S: Into<String>>(id: i32, packet_type: PacketType, body: S) -> Self {
-		Packet {
-			id,
-			packet_type,
-			body: body.into(),
-		}
+	pub(crate) fn new(id: i32, packet_type: PacketType, body: String) -> Self {
+		Packet { id, packet_type, body }
 	}
 
 	pub(crate) fn get_id(&self) -> &i32 {

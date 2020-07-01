@@ -2,10 +2,13 @@ use std::{net::SocketAddr, time::Duration};
 
 use tokio::{net::TcpStream, time::timeout};
 
+use crate::error::RconError::IO;
 use crate::{
 	error::RconError::{self, DesynchronizedPacket, PasswordIncorrect, UnexpectedPacket},
 	packet::{Packet, TYPE_AUTH, TYPE_AUTH_RESPONSE, TYPE_EXEC, TYPE_RESPONSE},
 };
+use std::io::ErrorKind;
+use std::net::ToSocketAddrs;
 
 /// Represents a single-established RCON connection to the server, which will not automatically reconnect once the connection has failed.
 /// This struct will instead opt to return [`IO errors`](enum.Error.html#variant.IO), leaving connection responsibility in the callers hands.
@@ -28,11 +31,19 @@ pub struct SingleConnection {
 
 impl SingleConnection {
 	/// Opens a new RCON connection, with an optional timeout, and authenticates the connection to the remote server.
-	pub async fn open<S: Into<String>>(
-		address: S, pass: S, connect_timeout: Option<Duration>,
+	pub async fn open(
+		address: impl ToString, pass: impl ToString, connect_timeout: Option<Duration>,
 	) -> Result<Self, RconError> {
 		let mut stream = {
-			let socket_address: SocketAddr = address.into().parse()?;
+			let socket_address: SocketAddr = match address.to_string().to_socket_addrs()?.next() {
+				Some(addr) => addr,
+				None => {
+					return Err(IO(std::io::Error::new(
+						ErrorKind::AddrNotAvailable,
+						"Could not resolve rcon host addr",
+					)))
+				}
+			};
 			let connect = TcpStream::connect(&socket_address);
 			match connect_timeout {
 				Some(timeout_duration) => match timeout(timeout_duration, connect).await {
@@ -43,7 +54,7 @@ impl SingleConnection {
 			}?
 		};
 
-		Packet::new(0, TYPE_AUTH, pass.into())
+		Packet::new(0, TYPE_AUTH, pass.to_string())
 			.send_internal(&mut stream)
 			.await?;
 		{
@@ -60,14 +71,14 @@ impl SingleConnection {
 	}
 
 	/// Sends a command to the RCON server, returning the combined reply (in case there are multiple packets) or an error.
-	pub async fn exec<S: Into<String>>(&mut self, cmd: S) -> Result<String, RconError> {
+	pub async fn exec(&mut self, cmd: impl ToString) -> Result<String, RconError> {
 		// 0. Prepare some variables
 		let mut end_id = -1;
 		let mut result = String::new();
 
 		// 1. Send the original command
 		let original_id = self.next_counter();
-		Packet::new(original_id, TYPE_EXEC, cmd.into())
+		Packet::new(original_id, TYPE_EXEC, cmd.to_string())
 			.send_internal(&mut self.stream)
 			.await?;
 
@@ -82,7 +93,7 @@ impl SingleConnection {
 			if end_id == -1 {
 				// Our counter can never be negative due to overflow protection
 				end_id = self.next_counter();
-				Packet::new(end_id, TYPE_EXEC, "")
+				Packet::new(end_id, TYPE_EXEC, "".to_string())
 					.send_internal(&mut self.stream)
 					.await?;
 			}

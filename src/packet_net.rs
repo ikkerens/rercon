@@ -17,8 +17,8 @@ impl Packet {
 	}
 
 	pub(crate) async fn read(stream: &mut TcpStream) -> Result<Self, RconError> {
-		let mut len_buf = Vec::with_capacity(4);
-		stream.read(&mut len_buf).await?;
+		let mut len_buf = vec![0; 4];
+		stream.read_exact(&mut len_buf).await?;
 		let len = LittleEndian::read_i32(&len_buf) as usize;
 
 		let mut buf = Vec::with_capacity(len);
