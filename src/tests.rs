@@ -1,7 +1,4 @@
-use crate::{
-	packet::{Packet, TYPE_AUTH_RESPONSE, TYPE_RESPONSE},
-	Connection, Settings,
-};
+use crate::packet::{Packet, TYPE_AUTH_RESPONSE, TYPE_RESPONSE};
 
 #[tokio::test]
 async fn packet_serialize() {
