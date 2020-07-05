@@ -22,15 +22,15 @@ impl Packet {
 		Packet { id, packet_type, body }
 	}
 
-	pub(crate) fn get_id(&self) -> &i32 {
-		&self.id
+	pub(crate) fn get_id(&self) -> i32 {
+		self.id
 	}
 
-	pub(crate) fn get_packet_type(&self) -> &PacketType {
-		&self.packet_type
+	pub(crate) fn get_packet_type(&self) -> PacketType {
+		self.packet_type
 	}
 
-	pub(crate) fn get_body(&self) -> &String {
+	pub(crate) fn get_body(&self) -> &str {
 		&self.body
 	}
 

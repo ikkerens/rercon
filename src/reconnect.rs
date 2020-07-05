@@ -3,7 +3,7 @@ use std::{ops::DerefMut, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::delay_for};
 
 use crate::{
-	connection::SingleConnection,
+	connection::{Settings, SingleConnection},
 	error::RconError::{self, BusyReconnecting, IO},
 	reconnect::Status::{Connected, Disconnected},
 };
@@ -22,25 +22,23 @@ enum Status {
 pub struct ReconnectingConnection {
 	address: String,
 	pass: String,
-	connect_timeout: Option<Duration>,
+	settings: Settings,
 
 	internal: Arc<Mutex<Status>>,
 }
 
 impl ReconnectingConnection {
 	/// This function behaves identical to [`Connection::open`](struct.Connection.html#method.open).
-	pub async fn open(
-		address: impl ToString, pass: impl ToString, connect_timeout: Option<Duration>,
-	) -> Result<Self, RconError> {
+	pub async fn open(address: impl ToString, pass: impl ToString, settings: Settings) -> Result<Self, RconError> {
 		let address = address.to_string();
 		let pass = pass.to_string();
 		let internal = Arc::new(Mutex::new(Connected(
-			SingleConnection::open(address.clone(), pass.clone(), connect_timeout).await?,
+			SingleConnection::open(address.clone(), pass.clone(), settings.clone()).await?,
 		)));
 		Ok(ReconnectingConnection {
 			address,
 			pass,
-			connect_timeout,
+			settings,
 			internal,
 		})
 	}
@@ -83,7 +81,7 @@ impl ReconnectingConnection {
 
 	async fn reconnect_loop(&self) {
 		loop {
-			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.connect_timeout).await {
+			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.settings.clone()).await {
 				Err(_) => {
 					delay_for(Duration::from_secs(1)).await;
 				}

@@ -1,4 +1,7 @@
-use crate::packet::{Packet, TYPE_AUTH_RESPONSE, TYPE_RESPONSE};
+use crate::{
+	packet::{Packet, TYPE_AUTH_RESPONSE, TYPE_RESPONSE},
+	Connection, Settings,
+};
 
 #[tokio::test]
 async fn packet_serialize() {
@@ -22,7 +25,17 @@ async fn packet_deserialize() {
 		110, 116, 32, 115, 116, 114, 105, 110, 103, 0, 0,
 	];
 	let p = Packet::decode_packet_buffer(36, &buf).unwrap();
-	assert_eq!(*p.get_id(), 0x77654321);
-	assert_eq!(*p.get_packet_type(), TYPE_AUTH_RESPONSE);
-	assert_eq!(*p.get_body(), "This is a different string".to_string());
+	assert_eq!(p.get_id(), 0x77654321);
+	assert_eq!(p.get_packet_type(), TYPE_AUTH_RESPONSE);
+	assert_eq!(p.get_body(), "This is a different string");
 }
+/*
+#[tokio::test]
+async fn integration_test() {
+	let mut c = Connection::open("localhost:25575", "test", Settings::default())
+		.await
+		.unwrap();
+	c.exec("say Hi there!").await.unwrap();
+	c.exec("say Hi there!").await.unwrap();
+}
+*/

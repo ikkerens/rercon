@@ -1,25 +1,49 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+	io::ErrorKind,
+	net::SocketAddr::{self, V4, V6},
+	time::Duration,
+};
 
-use tokio::{net::TcpStream, time::timeout};
+use tokio::{
+	net::{lookup_host, TcpStream, ToSocketAddrs},
+	time::{delay_for, timeout},
+};
 
-use crate::error::RconError::IO;
 use crate::{
-	error::RconError::{self, DesynchronizedPacket, PasswordIncorrect, UnexpectedPacket},
+	error::RconError::{self, DesynchronizedPacket, PasswordIncorrect, UnexpectedPacket, IO},
 	packet::{Packet, TYPE_AUTH, TYPE_AUTH_RESPONSE, TYPE_EXEC, TYPE_RESPONSE},
 };
-use std::io::ErrorKind;
-use std::net::ToSocketAddrs;
+
+/// Settings struct which can be used to adapt behaviour slightly which might help with nonconformant servers.
+#[derive(Clone)]
+pub struct Settings {
+	/// Maximum time allowed to set up a Tcp connection before giving up with a timeout. The maximum timeout possible
+	/// will be this multiplied by the amount of IPs the host resolves to.
+	pub connect_timeout: Duration,
+	/// Delay inbetween TCP connection establishment and sending of the first (auth) packet, needed for older Minecraft
+	/// servers.
+	pub auth_delay: Option<Duration>,
+}
+
+impl Default for Settings {
+	fn default() -> Self {
+		Settings {
+			connect_timeout: Duration::from_secs(10),
+			auth_delay: None,
+		}
+	}
+}
 
 /// Represents a single-established RCON connection to the server, which will not automatically reconnect once the connection has failed.
 /// This struct will instead opt to return [`IO errors`](enum.Error.html#variant.IO), leaving connection responsibility in the callers hands.
 ///
 /// # Example
 /// ```rust,no_run
-/// use rercon::Connection;
+/// use rercon::{Connection, Settings};
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let mut connection = Connection::open("123.456.789.123:27020", "my_secret_password", None).await.unwrap();
+///     let mut connection = Connection::open("123.456.789.123:27020", "my_secret_password", Settings::default()).await.unwrap();
 ///     let reply = connection.exec("hello").await.unwrap();
 ///     println!("Reply from server: {}", reply);
 /// }
@@ -31,38 +55,23 @@ pub struct SingleConnection {
 
 impl SingleConnection {
 	/// Opens a new RCON connection, with an optional timeout, and authenticates the connection to the remote server.
-	pub async fn open(
-		address: impl ToString, pass: impl ToString, connect_timeout: Option<Duration>,
-	) -> Result<Self, RconError> {
-		let mut stream = {
-			let socket_address: SocketAddr = match address.to_string().to_socket_addrs()?.next() {
-				Some(addr) => addr,
-				None => {
-					return Err(IO(std::io::Error::new(
-						ErrorKind::AddrNotAvailable,
-						"Could not resolve rcon host addr",
-					)))
-				}
-			};
-			let connect = TcpStream::connect(&socket_address);
-			match connect_timeout {
-				Some(timeout_duration) => match timeout(timeout_duration, connect).await {
-					Ok(r) => r,
-					Err(e) => Err(e.into()),
-				},
-				None => connect.await,
-			}?
-		};
+	/// If connect_timeout is set to None, a default timeout of 10 seconds will be used.
+	pub async fn open(address: impl ToSocketAddrs, pass: impl ToString, settings: Settings) -> Result<Self, RconError> {
+		let mut stream = try_connect(address, settings.connect_timeout).await?;
+
+		if let Some(auth_delay) = settings.auth_delay {
+			delay_for(auth_delay).await;
+		}
 
 		Packet::new(0, TYPE_AUTH, pass.to_string())
 			.send_internal(&mut stream)
 			.await?;
 		{
 			let response = Packet::read(&mut stream).await?;
-			if *response.get_packet_type() != TYPE_AUTH_RESPONSE {
+			if response.get_packet_type() != TYPE_AUTH_RESPONSE {
 				return Err(UnexpectedPacket);
 			}
-			if *response.get_id() == -1 {
+			if response.get_id() == -1 {
 				return Err(PasswordIncorrect);
 			}
 		}
@@ -99,24 +108,24 @@ impl SingleConnection {
 			}
 
 			// 5. Check if we received the correct ID, if not, something thread-fucky went on.
-			if *response.get_id() != original_id && *response.get_id() != end_id {
+			if response.get_id() != original_id && response.get_id() != end_id {
 				return Err(DesynchronizedPacket);
 			}
 
 			// 6. We should only be receiving a response at this time.
-			if *response.get_packet_type() != TYPE_RESPONSE {
+			if response.get_packet_type() != TYPE_RESPONSE {
 				return Err(UnexpectedPacket);
 			}
 
 			// 7. If we receive a response to our empty command from 4, that means all previous
 			//    messages have been sent and (hopefully) received. That means we can finish up our
 			//    result.
-			if *response.get_id() == end_id {
+			if response.get_id() == end_id {
 				break;
 			}
 
 			// 8. All checks have passed, append body to the end result
-			result += response.get_body().as_str();
+			result += response.get_body();
 		}
 
 		// Thank you come again
@@ -130,4 +139,32 @@ impl SingleConnection {
 		};
 		self.counter
 	}
+}
+
+async fn try_connect(address: impl ToSocketAddrs, timeout_duration: Duration) -> Result<TcpStream, RconError> {
+	// Resolve the host
+	let mut addrs: Vec<SocketAddr> = lookup_host(address).await?.collect();
+	// Sorted by IPv4 first, as these are more likely to succeed as most RCON implementations only bind to IPv4.
+	addrs.sort_by_key(|a| match a {
+		V4(_) => 0,
+		V6(_) => 1,
+	});
+
+	// Attempt connecting to all possible outcomes of the resolve
+	let mut error = None;
+	for addr in addrs {
+		match timeout(timeout_duration, TcpStream::connect(&addr)).await {
+			Ok(Ok(stream)) => return Ok(stream),  // Successful connection
+			Ok(Err(e)) => error = Some(e.into()), // Connecting failed, store error for later
+			Err(_) => continue,                   // Timeout expired
+		}
+	}
+
+	// So at this point, no connection succeeded. Which means either they errored, or... there was nothing to try.
+	Err(error.unwrap_or_else(|| {
+		IO(std::io::Error::new(
+			ErrorKind::AddrNotAvailable,
+			"Could not resolve rcon host addr",
+		))
+	}))
 }

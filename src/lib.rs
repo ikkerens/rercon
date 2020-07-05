@@ -13,6 +13,7 @@
 
 #![deny(warnings, bad_style, missing_docs)]
 
+pub use crate::connection::Settings;
 pub use crate::connection::SingleConnection as Connection;
 pub use crate::error::RconError as Error;
 #[cfg(feature = "reconnection")]
