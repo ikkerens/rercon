@@ -1,4 +1,5 @@
 use std::{
+	fmt::{self, Display, Formatter},
 	io::ErrorKind,
 	net::SocketAddr::{self, V4, V6},
 	pin::Pin,
@@ -182,19 +183,49 @@ struct ReceiverHandleShared {
 	close_connection: Notify,
 }
 
+#[derive(Debug)]
+enum ReceiveError {
+	Rcon(RconError),
+	Shutdown,
+}
+
+impl Display for ReceiveError {
+	fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+		match self {
+			Self::Rcon(e) => e.fmt(f),
+			Self::Shutdown => write!(f, "receiver task terminated"),
+		}
+	}
+}
+
+impl std::error::Error for ReceiveError {}
+
+impl From<RconError> for ReceiveError {
+	fn from(e: RconError) -> Self {
+		Self::Rcon(e)
+	}
+}
+
 async fn receive_loop(
 	mut stream: OwnedReadHalf, shared: Arc<ReceiverHandleShared>, mut sender: mpsc::Sender<Result<String, RconError>>,
 ) {
 	loop {
 		let response = receive_response(Pin::new(&mut stream), &shared).await;
 				shared.request_id.store(-1, Ordering::Release);
+		let response = match response {
+			Ok(r) => Ok(r),
+			Err(e) => match e {
+				ReceiveError::Rcon(r) => Err(r),
+				ReceiveError::Shutdown => return,
+			},
+		};
 		let _ = sender.send(response).await;
 			}
 			}
 
 async fn receive_response(
 	mut stream: Pin<&mut impl AsyncRead>, shared: &ReceiverHandleShared,
-) -> Result<String, RconError> {
+) -> Result<String, ReceiveError> {
 	let mut end_id = -1;
 	let mut result = String::new();
 
@@ -202,15 +233,15 @@ async fn receive_response(
 	loop {
 		// Read the first response to the command.
 		let response = select! {
-			packet = Packet::read(stream.as_mut()) => packet,
-			_ = shared.close_connection.notified() => Err(RconError::IO(std::io::Error::new(ErrorKind::ConnectionReset, "closed listener task"))),
+			packet = Packet::read(stream.as_mut()) => packet.map_err(ReceiveError::Rcon),
+			_ = shared.close_connection.notified() => Err(ReceiveError::Shutdown),
 		}?;
 
 		let original_id = shared.request_id.load(Ordering::Acquire); // TODO: can this be loosened?
 		if original_id <= 0 {
 			// Not currently listening for a response.
 			// (SingleConnection always uses a positive counter.)
-			return Err(DesynchronizedPacket);
+			return Err(ReceiveError::from(DesynchronizedPacket));
 		}
 
 		// Check if we received the correct ID. If not, either the client or server is buggy or non-conformant. We'll skip the packet.
@@ -220,7 +251,7 @@ async fn receive_response(
 
 		// We should only be receiving a response at this time.
 		if response.get_packet_type() != TYPE_RESPONSE {
-			return Err(UnexpectedPacket);
+			return Err(ReceiveError::from(UnexpectedPacket));
 		}
 
 		// Let the sending task send the empty command.
