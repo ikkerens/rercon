@@ -187,19 +187,10 @@ async fn receive_loop(
 ) {
 	loop {
 		let response = receive_response(Pin::new(&mut stream), &shared).await;
-		match response {
-			Ok(r) => {
 				shared.request_id.store(-1, Ordering::Release);
-				let _ = sender.send(Ok(r)).await;
+		let _ = sender.send(response).await;
 			}
-			Err(DesynchronizedPacket) => (), // Ignore these and keep listening.
-			Err(e) => {
-				shared.request_id.store(-1, Ordering::Release);
-				let _ = sender.send(Err(e)).await;
 			}
-		}
-	}
-}
 
 async fn receive_response(
 	mut stream: Pin<&mut impl AsyncRead>, shared: &ReceiverHandleShared,
@@ -222,20 +213,20 @@ async fn receive_response(
 			return Err(DesynchronizedPacket);
 		}
 
-		// Let the sending task send the empty command.
-		if end_id == -1 {
-			end_id = next_counter(original_id);
-			shared.received_first_response.notify();
-		}
-
-		// Check if we received the correct ID. If not, either the client or server is buggy or non-conformant.
+		// Check if we received the correct ID. If not, either the client or server is buggy or non-conformant. We'll skip the packet.
 		if response.get_id() != original_id && response.get_id() != end_id {
-			return Err(DesynchronizedPacket);
+			continue;
 		}
 
 		// We should only be receiving a response at this time.
 		if response.get_packet_type() != TYPE_RESPONSE {
 			return Err(UnexpectedPacket);
+		}
+
+		// Let the sending task send the empty command.
+		if end_id == -1 {
+			end_id = next_counter(original_id);
+			shared.received_first_response.notify();
 		}
 
 		// If we receive a response to our empty command, that means all
