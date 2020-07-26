@@ -19,6 +19,7 @@ use tokio::{
 	},
 	select,
 	sync::{mpsc, Notify},
+	task::JoinHandle,
 	time::{delay_for, timeout},
 };
 
@@ -122,6 +123,12 @@ impl SingleConnection {
 		self.receiver.get_response().await
 	}
 
+	/// Closes the connection, joining any background tasks that were spawned to help manage it.
+	// TODO: this won't be necessary if/when async Drop becomes available.
+	pub async fn close(self) {
+		self.receiver.close().await;
+	}
+
 	fn next_counter(&mut self) -> i32 {
 		self.counter = next_counter(self.counter);
 		self.counter
@@ -138,6 +145,7 @@ fn next_counter(counter: i32) -> i32 {
 struct ReceiverHandle {
 	shared: Arc<ReceiverHandleShared>,
 	receiver: mpsc::Receiver<Result<String, RconError>>,
+	task: Option<JoinHandle<()>>,
 }
 
 impl ReceiverHandle {
@@ -148,8 +156,12 @@ impl ReceiverHandle {
 			close_connection: Notify::new(),
 		});
 		let (sender, receiver) = mpsc::channel(1);
-		tokio::spawn(receive_loop(stream, shared.clone(), sender));
-		Self { shared, receiver }
+		let task = tokio::spawn(receive_loop(stream, shared.clone(), sender));
+		Self {
+			shared,
+			receiver,
+			task: Some(task),
+		}
 	}
 
 	pub fn set_request_id(&mut self, id: i32) {
@@ -165,8 +177,15 @@ impl ReceiverHandle {
 			Some(val) => val,
 			None => Err(RconError::IO(std::io::Error::new(
 				ErrorKind::ConnectionReset,
-				"receiving task terminated unexpectedly",
+				"receiving task terminated",
 			))),
+		}
+	}
+
+	async fn close(mut self) {
+		if let Some(task) = self.task.take() {
+			self.shared.close_connection.notify();
+			let _ = task.await;
 		}
 	}
 }
@@ -211,7 +230,7 @@ async fn receive_loop(
 ) {
 	loop {
 		let response = receive_response(Pin::new(&mut stream), &shared).await;
-				shared.request_id.store(-1, Ordering::Release);
+		shared.request_id.store(-1, Ordering::Release);
 		let response = match response {
 			Ok(r) => Ok(r),
 			Err(e) => match e {
@@ -220,8 +239,8 @@ async fn receive_loop(
 			},
 		};
 		let _ = sender.send(response).await;
-			}
-			}
+	}
+}
 
 async fn receive_response(
 	mut stream: Pin<&mut impl AsyncRead>, shared: &ReceiverHandleShared,

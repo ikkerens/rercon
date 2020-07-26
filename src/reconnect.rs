@@ -1,16 +1,17 @@
-use std::{ops::DerefMut, sync::Arc, time::Duration};
+use std::{io::ErrorKind, mem, ops::DerefMut, sync::Arc, time::Duration};
 
 use tokio::{sync::Mutex, time::delay_for};
 
 use crate::{
 	connection::{Settings, SingleConnection},
 	error::RconError::{self, BusyReconnecting, IO},
-	reconnect::Status::{Connected, Disconnected},
+	reconnect::Status::{Connected, Disconnected, Stopped},
 };
 
 enum Status {
 	Connected(SingleConnection),
 	Disconnected(String),
+	Stopped,
 }
 
 /// Drop-in replacement wrapper of [`Connection`](struct.Connection.html) which intercepts all [`IO errors`](enum.Error.html#variant.IO)
@@ -52,6 +53,12 @@ impl ReconnectingConnection {
 			let connection = match lock.deref_mut() {
 				Connected(ref mut c) => c,
 				Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
+				Stopped => {
+					return Err(RconError::IO(std::io::Error::new(
+						ErrorKind::ConnectionReset,
+						"RCON connection closed",
+					)))
+				}
 			};
 
 			// If we are connected, send the request
@@ -64,6 +71,15 @@ impl ReconnectingConnection {
 		}
 
 		result
+	}
+
+	/// Closes the connection, joining any background tasks that were spawned to help manage it.
+	pub async fn close(self) {
+		let mut lock = self.internal.lock().await;
+		if let Connected(connection) = mem::replace(&mut *lock, Status::Stopped) {
+			connection.close().await;
+		}
+		// TODO: if reconnecting, we probably want to make sure to join the background task (and terminate it early if it's still waiting for a connection).
 	}
 
 	async fn start_reconnect(&self, e: RconError) -> RconError {
@@ -87,7 +103,12 @@ impl ReconnectingConnection {
 				}
 				Ok(c) => {
 					let mut lock = self.internal.lock().await;
-					*lock = Connected(c);
+					match *lock {
+						Stopped => c.close().await,
+						_ => {
+							*lock = Connected(c);
+						}
+					}
 					return;
 				}
 			}
