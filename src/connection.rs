@@ -24,7 +24,7 @@ use tokio::{
 };
 
 use crate::{
-	error::RconError::{self, DesynchronizedPacket, PasswordIncorrect, UnexpectedPacket, IO},
+	error::RconError::{self, PasswordIncorrect, UnexpectedPacket, IO},
 	packet::{Packet, TYPE_AUTH, TYPE_AUTH_RESPONSE, TYPE_EXEC, TYPE_RESPONSE},
 };
 
@@ -260,10 +260,11 @@ async fn receive_response(
 		if original_id <= 0 {
 			// Not currently listening for a response.
 			// (SingleConnection always uses a positive counter.)
-			return Err(ReceiveError::from(DesynchronizedPacket));
+			continue;
 		}
 
-		// Check if we received the correct ID. If not, either the client or server is buggy or non-conformant. We'll skip the packet.
+		// Check if we received the correct ID. If not, either the client or server is buggy or non-conformant.
+		// Either way, we'll skip the packet.
 		if response.get_id() != original_id && response.get_id() != end_id {
 			continue;
 		}
