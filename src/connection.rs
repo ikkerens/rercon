@@ -114,7 +114,7 @@ impl SingleConnection {
 		// We do this because some RCON servers don't properly respond if we send execs
 		// too fast. So we wait for the first response.
 		// Our counter can never be negative due to overflow protection.
-		self.receiver.wait_for_first_packet().await;
+		self.receiver.wait_for_first_packet().await?;
 		let end_id = self.next_counter();
 		Packet::new(end_id, TYPE_EXEC, "".to_string())
 			.send_internal(Pin::new(&mut self.write))
@@ -168,12 +168,22 @@ impl ReceiverHandle {
 		self.shared.request_id.store(id, Ordering::Release);
 	}
 
-	pub async fn wait_for_first_packet(&mut self) {
-		self.shared.received_first_response.notified().await;
+	pub async fn wait_for_first_packet(&mut self) -> Result<(), RconError> {
+		select! {
+			_ = self.shared.received_first_response.notified() => Ok(()),
+			result = Self::get_response_impl(&mut self.receiver) => match result {
+				Ok(_) => unreachable!(), // Background task won't return a response until after the first packet is received
+				Err(e) => Err(e),
+			}
+		}
 	}
 
 	async fn get_response(&mut self) -> Result<String, RconError> {
-		match self.receiver.recv().await {
+		Self::get_response_impl(&mut self.receiver).await
+	}
+
+	async fn get_response_impl(receiver: &mut mpsc::Receiver<Result<String, RconError>>) -> Result<String, RconError> {
+		match receiver.recv().await {
 			Some(val) => val,
 			None => Err(RconError::IO(std::io::Error::new(
 				ErrorKind::ConnectionReset,
