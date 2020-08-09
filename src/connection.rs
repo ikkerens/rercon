@@ -266,7 +266,7 @@ async fn receive_response(
 			_ = shared.close_connection.notified() => Err(ReceiveError::Shutdown),
 		}?;
 
-		let original_id = shared.request_id.load(Ordering::Acquire); // TODO: can this be loosened?
+		let original_id = shared.request_id.load(Ordering::Acquire);
 		if original_id <= 0 {
 			// Not currently listening for a response.
 			// (SingleConnection always uses a positive counter.)
