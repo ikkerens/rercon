@@ -1,4 +1,4 @@
-use std::{io::ErrorKind, mem, ops::DerefMut, sync::Arc, time::Duration};
+use std::{mem, ops::DerefMut, sync::Arc, time::Duration};
 
 use tokio::{
 	select,
@@ -68,12 +68,7 @@ impl ReconnectingConnection {
 			let connection = match lock.deref_mut() {
 				Connected(ref mut c) => c,
 				Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
-				Stopped => {
-					return Err(RconError::IO(std::io::Error::new(
-						ErrorKind::ConnectionReset,
-						"RCON connection closed",
-					)))
-				}
+				Stopped => unreachable!("should only set Stopped state when closing connection"),
 			};
 
 			// If we are connected, send the request
