@@ -19,7 +19,6 @@ enum Status {
 /// instead.
 ///
 /// For further docs, refer to [`Connection`](struct.Connection.html), as it shares the same API.
-#[derive(Clone)]
 pub struct ReconnectingConnection {
 	address: String,
 	pass: String,
@@ -89,20 +88,24 @@ impl ReconnectingConnection {
 			*lock = Disconnected(e.to_string());
 		}
 
-		let clone = self.clone();
-		tokio::spawn(async move { clone.reconnect_loop().await });
+		tokio::spawn(Self::reconnect_loop(
+			self.address.clone(),
+			self.pass.clone(),
+			self.settings.clone(),
+			self.internal.clone(),
+		));
 
 		BusyReconnecting(e.to_string())
 	}
 
-	async fn reconnect_loop(&self) {
+	async fn reconnect_loop(address: String, pass: String, settings: Settings, internal: Arc<Mutex<Status>>) {
 		loop {
-			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.settings.clone()).await {
+			match SingleConnection::open(address.clone(), pass.clone(), settings.clone()).await {
 				Err(_) => {
 					delay_for(Duration::from_secs(1)).await;
 				}
 				Ok(c) => {
-					let mut lock = self.internal.lock().await;
+					let mut lock = internal.lock().await;
 					match *lock {
 						Stopped => c.close().await,
 						_ => {
