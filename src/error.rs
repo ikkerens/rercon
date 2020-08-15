@@ -19,8 +19,6 @@ pub enum RconError {
 	UTFEncoding(FromUtf8Error),
 	/// The server sent a packet with a type we were not expecting.
 	UnexpectedPacket,
-	/// The server sent a packet with an ID we were not expecting.
-	DesynchronizedPacket,
 	/// The pass field is incorrect
 	PasswordIncorrect,
 	/// Returned by [`ReConnection::exec`](struct.ReConnection.html#method.exec) when [`ReConnection`](struct.ReConnection.html) is busy reconnecting.
