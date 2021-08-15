@@ -1,16 +1,27 @@
-use std::{ops::DerefMut, sync::Arc, time::Duration};
+use std::{mem, ops::DerefMut, sync::Arc, time::Duration};
 
-use tokio::{sync::Mutex, time::delay_for};
+use tokio::{
+	select,
+	sync::{Mutex, Notify},
+	task::JoinHandle,
+	time::delay_for,
+};
 
 use crate::{
 	connection::{Settings, SingleConnection},
 	error::RconError::{self, BusyReconnecting, IO},
-	reconnect::Status::{Connected, Disconnected},
+	reconnect::Status::{Connected, Disconnected, Stopped},
 };
 
 enum Status {
 	Connected(SingleConnection),
 	Disconnected(String),
+	Stopped,
+}
+
+struct Internal {
+	status: Mutex<Status>,
+	close_connection: Notify,
 }
 
 /// Drop-in replacement wrapper of [`Connection`](struct.Connection.html) which intercepts all [`IO errors`](enum.Error.html#variant.IO)
@@ -18,13 +29,13 @@ enum Status {
 /// instead.
 ///
 /// For further docs, refer to [`Connection`](struct.Connection.html), as it shares the same API.
-#[derive(Clone)]
 pub struct ReconnectingConnection {
 	address: String,
 	pass: String,
 	settings: Settings,
 
-	internal: Arc<Mutex<Status>>,
+	internal: Arc<Internal>,
+	reconnect_loop: Option<JoinHandle<()>>,
 }
 
 impl ReconnectingConnection {
@@ -32,14 +43,19 @@ impl ReconnectingConnection {
 	pub async fn open(address: impl ToString, pass: impl ToString, settings: Settings) -> Result<Self, RconError> {
 		let address = address.to_string();
 		let pass = pass.to_string();
-		let internal = Arc::new(Mutex::new(Connected(
+		let status = Mutex::new(Connected(
 			SingleConnection::open(address.clone(), pass.clone(), settings.clone()).await?,
-		)));
+		));
+		let internal = Arc::new(Internal {
+			status,
+			close_connection: Notify::new(),
+		});
 		Ok(ReconnectingConnection {
 			address,
 			pass,
 			settings,
 			internal,
+			reconnect_loop: None,
 		})
 	}
 
@@ -48,10 +64,11 @@ impl ReconnectingConnection {
 	pub async fn exec(&mut self, cmd: impl ToString) -> Result<String, RconError> {
 		// First, we check if we are actively reconnecting, this must be done within a Mutex
 		let result = {
-			let mut lock = self.internal.lock().await;
+			let mut lock = self.internal.status.lock().await;
 			let connection = match lock.deref_mut() {
 				Connected(ref mut c) => c,
 				Disconnected(msg) => return Err(BusyReconnecting(msg.clone())),
+				Stopped => unreachable!("should only set Stopped state when closing connection"),
 			};
 
 			// If we are connected, send the request
@@ -66,31 +83,64 @@ impl ReconnectingConnection {
 		result
 	}
 
-	async fn start_reconnect(&self, e: RconError) -> RconError {
+	/// Closes the connection, joining any background tasks that were spawned to help manage it.
+	pub async fn close(mut self) {
+		{
+			let mut lock = self.internal.status.lock().await;
+			if let Connected(connection) = mem::replace(&mut *lock, Status::Stopped) {
+				connection.close().await;
+			}
+		}
+
+		self.internal.close_connection.notify();
+		if let Some(handle) = self.reconnect_loop.take() {
+			handle.await.unwrap_or_else(|e| match e.is_cancelled() {
+				true => (), // Cancellation is fine.
+				false => panic!(e.into_panic()),
+			});
+		}
+	}
+
+	async fn start_reconnect(&mut self, e: RconError) -> RconError {
 		// First, we change the status, which automatically disconnects the old connection
 		{
-			let mut lock = self.internal.lock().await;
+			let mut lock = self.internal.status.lock().await;
 			*lock = Disconnected(e.to_string());
 		}
 
-		let clone = self.clone();
-		tokio::spawn(async move { clone.reconnect_loop().await });
+		self.reconnect_loop = Some(tokio::spawn(Self::reconnect_loop(
+			self.address.clone(),
+			self.pass.clone(),
+			self.settings.clone(),
+			self.internal.clone(),
+		)));
 
 		BusyReconnecting(e.to_string())
 	}
 
-	async fn reconnect_loop(&self) {
+	async fn reconnect_loop(address: String, pass: String, settings: Settings, internal: Arc<Internal>) {
 		loop {
-			match SingleConnection::open(self.address.clone(), self.pass.clone(), self.settings.clone()).await {
-				Err(_) => {
-					delay_for(Duration::from_secs(1)).await;
-				}
-				Ok(c) => {
-					let mut lock = self.internal.lock().await;
-					*lock = Connected(c);
+			let close_connection = internal.close_connection.notified();
+			let connection = SingleConnection::open(address.clone(), pass.clone(), settings.clone());
+			select! {
+				Ok(c) = connection => {
+					let mut lock = internal.status.lock().await;
+					match *lock {
+						Stopped => c.close().await,
+						_ => {
+							*lock = Connected(c);
+						}
+					}
 					return;
-				}
-			}
+				},
+				_ = close_connection => return,
+				else => (), // Connection error
+			};
+			let close_connection = internal.close_connection.notified();
+			select! {
+				_ = delay_for(Duration::from_secs(1)) => (),
+				_ = close_connection => return,
+			};
 		}
 	}
 }
