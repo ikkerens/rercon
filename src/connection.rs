@@ -136,10 +136,7 @@ impl SingleConnection {
 }
 
 fn next_counter(counter: i32) -> i32 {
-	match counter.checked_add(1) {
-		Some(new) => new,
-		None => 1,
-	}
+	counter.checked_add(1).unwrap_or(1)
 }
 
 struct ReceiverHandle {
