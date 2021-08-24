@@ -20,7 +20,7 @@ use tokio::{
 	select,
 	sync::{mpsc, Notify},
 	task::JoinHandle,
-	time::{delay_for, timeout},
+	time::{sleep, timeout},
 };
 
 use crate::{
@@ -76,7 +76,7 @@ impl SingleConnection {
 		let (mut read, mut write) = stream.into_split();
 
 		if let Some(auth_delay) = settings.auth_delay {
-			delay_for(auth_delay).await;
+			sleep(auth_delay).await;
 		}
 
 		Packet::new(0, TYPE_AUTH, pass.to_string())
@@ -136,10 +136,7 @@ impl SingleConnection {
 }
 
 fn next_counter(counter: i32) -> i32 {
-	match counter.checked_add(1) {
-		Some(new) => new,
-		None => 1,
-	}
+	counter.checked_add(1).unwrap_or(1)
 }
 
 struct ReceiverHandle {
@@ -194,7 +191,7 @@ impl ReceiverHandle {
 
 	async fn close(mut self) {
 		if let Some(task) = self.task.take() {
-			self.shared.close_connection.notify();
+			self.shared.close_connection.notify_one();
 			let _ = task.await;
 		}
 	}
@@ -202,7 +199,7 @@ impl ReceiverHandle {
 
 impl Drop for ReceiverHandle {
 	fn drop(&mut self) {
-		self.shared.close_connection.notify();
+		self.shared.close_connection.notify_one();
 	}
 }
 
@@ -236,7 +233,7 @@ impl From<RconError> for ReceiveError {
 }
 
 async fn receive_loop(
-	mut stream: OwnedReadHalf, shared: Arc<ReceiverHandleShared>, mut sender: mpsc::Sender<Result<String, RconError>>,
+	mut stream: OwnedReadHalf, shared: Arc<ReceiverHandleShared>, sender: mpsc::Sender<Result<String, RconError>>,
 ) {
 	loop {
 		let response = receive_response(Pin::new(&mut stream), &shared).await;
@@ -287,7 +284,7 @@ async fn receive_response(
 		// Let the sending task send the empty command.
 		if end_id == -1 {
 			end_id = next_counter(original_id);
-			shared.received_first_response.notify();
+			shared.received_first_response.notify_one();
 		}
 
 		// If we receive a response to our empty command, that means all

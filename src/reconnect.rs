@@ -1,10 +1,10 @@
-use std::{mem, ops::DerefMut, sync::Arc, time::Duration};
+use std::{mem, ops::DerefMut, panic::panic_any, sync::Arc, time::Duration};
 
 use tokio::{
 	select,
 	sync::{Mutex, Notify},
 	task::JoinHandle,
-	time::delay_for,
+	time::sleep,
 };
 
 use crate::{
@@ -92,11 +92,11 @@ impl ReconnectingConnection {
 			}
 		}
 
-		self.internal.close_connection.notify();
+		self.internal.close_connection.notify_one();
 		if let Some(handle) = self.reconnect_loop.take() {
 			handle.await.unwrap_or_else(|e| match e.is_cancelled() {
 				true => (), // Cancellation is fine.
-				false => panic!(e.into_panic()),
+				false => panic_any(e.into_panic()),
 			});
 		}
 	}
@@ -138,7 +138,7 @@ impl ReconnectingConnection {
 			};
 			let close_connection = internal.close_connection.notified();
 			select! {
-				_ = delay_for(Duration::from_secs(1)) => (),
+				_ = sleep(Duration::from_secs(1)) => (),
 				_ = close_connection => return,
 			};
 		}
